@@ -1,0 +1,52 @@
+{
+  "name": "homeproxy-control-extension",
+  "private": true,
+  "version": "0.1.10",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:harness": "vite --host 127.0.0.1 --port 4173",
+    "build": "tsc -b && vite build",
+    "build:extension": "npm run build",
+    "build:xpi": "npm run build && node scripts/build-xpi.mjs",
+    "mock-api": "node scripts/mock-api-server.mjs",
+    "debug:env": "node scripts/run-debug-env.mjs",
+    "run:firefox": "npm run build && web-ext run --source-dir dist --devtools --browser-console",
+    "lint:extension": "npm run build && web-ext lint --source-dir dist",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/modifiers": "^9.0.0",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@formkit/auto-animate": "^0.9.0",
+    "lucide-react": "^0.574.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.56.1",
+    "@types/firefox-webext-browser": "^143.0.0",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@types/webextension-polyfill": "^0.12.4",
+    "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.24",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vite": "^7.3.1",
+    "web-ext": "^9.3.0"
+  }
+}

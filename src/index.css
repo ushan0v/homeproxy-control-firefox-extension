@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Trebuchet MS", "Segoe UI", "Noto Sans", sans-serif;
+  color: #f4f4f5;
+  background: #09090b;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 400px;
+  width: 400px;
+  min-height: 0;
+}
+
+html,
+body {
+  height: auto;
+  min-height: 0;
+}
+
+#root {
+  height: auto;
+  max-height: 580px;
+}
+
+body {
+  background: #09090b;
+  overflow: hidden;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgb(113 113 122 / 0.58);
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes refresh-spin-once {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.refresh-spin-once {
+  animation: refresh-spin-once 0.65s linear 1;
+  transform-origin: center;
+}
