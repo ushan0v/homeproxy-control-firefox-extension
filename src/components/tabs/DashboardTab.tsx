@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, Globe, Plus, Search } from "lucide-react";
 import type { CheckResult } from "../../types/homeproxy";
 import { routeClassLabel, routeClassToBadgeColor } from "../../lib/rule-utils";
@@ -11,6 +11,7 @@ interface Props {
   currentDomain: string;
   currentCheck: CheckResult | null;
   loadingCurrentSite: boolean;
+  quickMode: boolean;
   onOpenQuick: (domain: string) => void;
 }
 
@@ -18,10 +19,18 @@ export function DashboardTab({
   currentDomain,
   currentCheck,
   loadingCurrentSite,
+  quickMode,
   onOpenQuick,
 }: Props) {
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!quickMode) {
+      setInputValue("");
+      setError("");
+    }
+  }, [quickMode]);
 
   const statusLabel = useMemo(() => {
     if (!currentCheck) {
@@ -41,6 +50,7 @@ export function DashboardTab({
       setError("Некорректный URL или домен.");
       return;
     }
+    setInputValue("");
     setError("");
     onOpenQuick(normalized);
   }

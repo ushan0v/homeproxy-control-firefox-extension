@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CircleAlert, Trash2 } from "lucide-react";
 import type { SnifferDomainItem } from "../../types/homeproxy";
 import { Badge } from "../ui/Badge";
@@ -22,20 +22,11 @@ function toTestIdSuffix(value: string): string {
 
 export function SnifferTab({ items, tabId, onOpenQuick, onClearSniffer }: Props) {
   const [filter, setFilter] = useState<FilterType>("All");
-  const [openErrorItemId, setOpenErrorItemId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     if (filter === "All") return items;
     return items.filter((item) => item.status === filter);
   }, [filter, items]);
-
-  useEffect(() => {
-    if (!openErrorItemId) return;
-    const openedItem = filtered.find((item) => item.id === openErrorItemId);
-    if (!openedItem || !openedItem.error.trim()) {
-      setOpenErrorItemId(null);
-    }
-  }, [filtered, openErrorItemId]);
 
   function colorByStatus(status: SnifferDomainItem["status"]): "amber" | "emerald" | "rose" | "zinc" {
     switch (status) {
@@ -89,29 +80,20 @@ export function SnifferTab({ items, tabId, onOpenQuick, onClearSniffer }: Props)
       <div className="space-y-1 p-2">
         {filtered.map((req) => {
           const hasError = Boolean(req.error.trim());
-          const errorOpened = hasError && openErrorItemId === req.id;
           const testIdSuffix = toTestIdSuffix(req.id);
 
           return (
             <div key={req.id} className="relative cursor-default rounded-lg border border-zinc-900 p-2.5">
               <div className="flex items-center gap-3">
                 {hasError ? (
-                  <button
-                    type="button"
-                    data-testid={`sniffer-error-toggle-${testIdSuffix}`}
-                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${
-                      errorOpened
-                        ? "border-zinc-600 bg-zinc-900 text-rose-500"
-                        : "border-zinc-800 bg-zinc-950 text-rose-500 hover:border-zinc-700 hover:bg-zinc-900/80"
-                    }`}
-                    onClick={() => {
-                      setOpenErrorItemId((current) => (current === req.id ? null : req.id));
-                    }}
-                    title="Показать ошибку последнего запроса"
-                    aria-label="Показать ошибку последнего запроса"
+                  <div
+                    data-testid={`sniffer-error-indicator-${testIdSuffix}`}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-zinc-800 bg-zinc-950 text-rose-500"
+                    title="Ошибка последнего запроса"
+                    aria-label="Ошибка последнего запроса"
                   >
                     <CircleAlert size={14} />
-                  </button>
+                  </div>
                 ) : (
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-zinc-800 bg-zinc-950 text-[10px] font-mono text-zinc-500">
                     {req.type.slice(0, 3).toUpperCase()}
@@ -145,12 +127,6 @@ export function SnifferTab({ items, tabId, onOpenQuick, onClearSniffer }: Props)
                   </span>
                 </Button>
               </div>
-
-              {errorOpened ? (
-                <div data-testid={`sniffer-error-panel-${testIdSuffix}`} className="mt-2 text-[11px] leading-relaxed text-rose-400">
-                  {req.error}
-                </div>
-              ) : null}
             </div>
           );
         })}

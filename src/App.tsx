@@ -57,6 +57,7 @@ const EMPTY_WORKSPACE_SUMMARY: RulesWorkspaceSummary = {
   rulesChangeCount: 0,
   nodesChangeCount: 0,
   ruleSetsChangeCount: 0,
+  pendingRuleDeleteIds: [],
 };
 
 type ServiceToggleAction = "start" | "stop";
@@ -190,15 +191,16 @@ export default function App() {
   }, []);
 
   const resolvedQuickActions = useMemo<ResolvedQuickAction[]>(() => {
+    const pendingDeleted = new Set(workspaceSummary.pendingRuleDeleteIds);
     return quickActions
       .filter((item) => item.enabled)
       .map((item) => {
-        const rule = rules.find((entry) => entry.id === item.ruleId);
+        const rule = rules.find((entry) => entry.id === item.ruleId && !pendingDeleted.has(entry.id));
         if (!rule) return null;
         return { config: item, rule };
       })
       .filter((value): value is ResolvedQuickAction => Boolean(value));
-  }, [quickActions, rules]);
+  }, [quickActions, rules, workspaceSummary.pendingRuleDeleteIds]);
   const quickRuleOptions = useMemo(
     () =>
       resolvedQuickActions.map(({ rule }) => {
@@ -692,6 +694,48 @@ export default function App() {
     rulesTabRef.current?.resetWorkspace();
   }
 
+  async function handleMatchRuleSets(query: string): Promise<string[]> {
+    if (!api) {
+      throw new Error("API не настроен.");
+    }
+
+    try {
+      const response = await api.matchRuleSets(query);
+      const tagToId = new Map<string, string>();
+      const knownIds = new Set<string>();
+
+      for (const item of ruleSets) {
+        const id = item.id.trim();
+        const tag = item.tag.trim();
+        if (!id) continue;
+        knownIds.add(id);
+        tagToId.set(id, id);
+        if (tag) {
+          tagToId.set(tag, id);
+        }
+      }
+
+      const matchedIds = new Set<string>();
+      for (const item of response.matches) {
+        const tag = item.tag?.trim() || "";
+        const shortTag = item.shortTag?.trim() || "";
+        if (tag && tagToId.has(tag)) {
+          matchedIds.add(tagToId.get(tag)!);
+        }
+        if (shortTag && tagToId.has(shortTag)) {
+          matchedIds.add(tagToId.get(shortTag)!);
+        }
+        if (shortTag && knownIds.has(shortTag)) {
+          matchedIds.add(shortTag);
+        }
+      }
+
+      return Array.from(matchedIds);
+    } catch (error) {
+      throw new Error(humanizeApiError(error));
+    }
+  }
+
   function handleTabChange(nextTab: AppTab) {
     if (quickFlow) {
       setQuickFlow(null);
@@ -880,6 +924,10 @@ export default function App() {
 
   const popupMaxHeight = `${POPUP_MAX_HEIGHT}px`;
   const quickMode = Boolean(quickFlow?.domain);
+  const rulesVisibleForQuickSettings = useMemo(() => {
+    const pendingDeleted = new Set(workspaceSummary.pendingRuleDeleteIds);
+    return rules.filter((rule) => !pendingDeleted.has(rule.id));
+  }, [rules, workspaceSummary.pendingRuleDeleteIds]);
   const hasWorkspaceChanges = workspaceSummary.totalChanges > 0;
   const serviceBusyLabel =
     servicePendingAction === "stop"
@@ -1005,6 +1053,7 @@ export default function App() {
             currentDomain={currentDomain}
             currentCheck={currentCheck}
             loadingCurrentSite={loadingCurrentSite}
+            quickMode={quickMode}
             onOpenQuick={(domain) => handleOpenQuick(domain, "dashboard")}
           />
         </div>
@@ -1026,13 +1075,14 @@ export default function App() {
             ruleSets={ruleSets}
             devices={devices}
             onApplyChanges={handleApplyRulesWorkspace}
+            onMatchRuleSets={handleMatchRuleSets}
             onSummaryChange={setWorkspaceSummary}
           />
         </div>
 
         <div className={quickMode || activeTab !== "settings" ? "hidden" : ""}>
           <SettingsTab
-            rules={rules}
+            rules={rulesVisibleForQuickSettings}
             quickActions={quickActions}
             onQuickActionsChange={handleQuickActionsChange}
             onResetConnection={handleResetConnection}
@@ -1060,11 +1110,14 @@ export default function App() {
           className="z-30 shrink-0 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 backdrop-blur"
           data-testid="workspace-apply-bar"
         >
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2">
+            <div className="justify-self-start rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] text-zinc-300">
+              Изменено: <span className="font-semibold text-zinc-100">{workspaceSummary.totalChanges}</span>
+            </div>
             <Button
               size="sm"
               variant="ghost"
-              className="h-8 w-full justify-center px-2 text-zinc-300"
+              className="h-8 w-full justify-center px-1.5 text-zinc-300"
               onClick={handleResetWorkspace}
               disabled={savingRules}
               data-testid="workspace-reset"
@@ -1073,7 +1126,7 @@ export default function App() {
             </Button>
             <Button
               size="sm"
-              className="h-8 w-full justify-center px-2"
+              className="h-8 w-full justify-center px-1.5"
               onClick={() => {
                 void handleApplyWorkspace();
               }}

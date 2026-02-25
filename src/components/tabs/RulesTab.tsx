@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  ArrowRight,
   ChevronDown,
   ChevronUp,
   Database,
@@ -16,6 +17,7 @@ import {
   Menu,
   Network,
   Plus,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -43,6 +45,7 @@ interface Props {
   ruleSets: RuleSetListItem[];
   devices: DeviceLeaseView[];
   onApplyChanges: (payload: RulesWorkspaceApplyPayload) => Promise<void>;
+  onMatchRuleSets: (query: string) => Promise<string[]>;
   onSummaryChange?: (summary: RulesWorkspaceSummary) => void;
 }
 
@@ -64,6 +67,7 @@ export interface RulesWorkspaceSummary {
   rulesChangeCount: number;
   nodesChangeCount: number;
   ruleSetsChangeCount: number;
+  pendingRuleDeleteIds: string[];
 }
 
 export interface RulesWorkspaceController {
@@ -149,7 +153,6 @@ interface PendingNodeCreateDraft {
 interface RuleSetDraft {
   id: string;
   name: string;
-  enabled: boolean;
   format: string;
   url: string;
   outbound: string;
@@ -164,7 +167,6 @@ interface RuleSetCreateDraft {
   url: string;
   outbound: string;
   updateInterval: string;
-  enabled: boolean;
 }
 
 type FieldErrorMap = Record<string, string>;
@@ -326,7 +328,6 @@ function createRuleSetDraft(item: RuleSetListItem): RuleSetDraft {
   return {
     id: item.id,
     name: item.name,
-    enabled: Boolean(item.enabled),
     format: item.format || "binary",
     url: item.url || "",
     outbound: normalizeOutboundTarget(item.outbound || "direct"),
@@ -387,7 +388,6 @@ function countRuleDraftChanges(base: RuleDraft, draft: RuleDraft, draftPriority:
 function countRuleSetDraftChanges(base: RuleSetDraft, draft: RuleSetDraft): number {
   let diff = 0;
   if (base.name !== draft.name) diff += 1;
-  if (base.enabled !== draft.enabled) diff += 1;
   if (base.format !== draft.format) diff += 1;
   if (base.url !== draft.url) diff += 1;
   if (normalizeOutboundTarget(base.outbound) !== normalizeOutboundTarget(draft.outbound)) diff += 1;
@@ -565,11 +565,13 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
     ruleSets,
     devices,
     onApplyChanges,
+    onMatchRuleSets,
     onSummaryChange,
   }: Props,
   ref,
 ) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const ruleSetMatchRequestRef = useRef(0);
   const [section, setSection] = useState<WorkspaceSection>("rules");
   const [expandedRuleId, setExpandedRuleId] = useState("");
   const [expandedRuleSetId, setExpandedRuleSetId] = useState("");
@@ -602,6 +604,10 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
   const [pendingRuleSetCreates, setPendingRuleSetCreates] = useState<RuleSetCreateDraft[]>([]);
   const [pendingRuleSetDeletes, setPendingRuleSetDeletes] = useState<Set<string>>(new Set());
   const [showRuleSetCreateForm, setShowRuleSetCreateForm] = useState(false);
+  const [showRuleSetMatchForm, setShowRuleSetMatchForm] = useState(false);
+  const [ruleSetMatchQuery, setRuleSetMatchQuery] = useState("");
+  const [ruleSetMatchBusy, setRuleSetMatchBusy] = useState(false);
+  const [ruleSetMatchedIds, setRuleSetMatchedIds] = useState<Set<string> | null>(null);
 
   const [ruleCreateDraft, setRuleCreateDraft] = useState<RuleCreateDraft>({
     tempId: "",
@@ -622,7 +628,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
     url: "",
     outbound: "direct",
     updateInterval: "1d",
-    enabled: true,
   });
 
   const [fieldErrors, setFieldErrors] = useState<FieldErrorMap>({});
@@ -764,6 +769,19 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
     () => sortedRuleSets.filter((item) => !pendingRuleSetDeletes.has(item.id)),
     [pendingRuleSetDeletes, sortedRuleSets],
   );
+  const filteredPendingRuleSetCreates = useMemo(() => {
+    if (!ruleSetMatchedIds) {
+      return pendingRuleSetCreates;
+    }
+    return pendingRuleSetCreates.filter((item) => ruleSetMatchedIds.has(item.id));
+  }, [pendingRuleSetCreates, ruleSetMatchedIds]);
+  const filteredVisibleRuleSets = useMemo(() => {
+    if (!ruleSetMatchedIds) {
+      return visibleRuleSets;
+    }
+    return visibleRuleSets.filter((item) => ruleSetMatchedIds.has(item.id));
+  }, [ruleSetMatchedIds, visibleRuleSets]);
+  const hasAnyRuleSetCards = visibleRuleSets.length > 0 || pendingRuleSetCreates.length > 0;
 
   const baseRuleDrafts = useMemo(() => {
     const map: Record<string, RuleDraft> = {};
@@ -1264,9 +1282,27 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       url: "",
       outbound: "direct",
       updateInterval: "1d",
-      enabled: true,
     });
   }, [baseRuleSetDrafts]);
+
+  useEffect(() => {
+    if (!ruleSetMatchedIds) return;
+
+    const available = new Set<string>([
+      ...sortedRuleSets.map((item) => item.id),
+      ...pendingRuleSetCreates.map((item) => item.id),
+    ]);
+    const next = new Set<string>();
+    for (const id of ruleSetMatchedIds) {
+      if (available.has(id)) {
+        next.add(id);
+      }
+    }
+    if (next.size === ruleSetMatchedIds.size) {
+      return;
+    }
+    setRuleSetMatchedIds(next);
+  }, [pendingRuleSetCreates, ruleSetMatchedIds, sortedRuleSets]);
 
   useEffect(() => {
     setRuleVisualOrder((prev) => {
@@ -1400,6 +1436,14 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
 
   function ruleSetUrlErrorKey(ruleSetId: string): string {
     return `ruleset:${ruleSetId}:url`;
+  }
+
+  function ruleSetMatchQueryErrorKey(): string {
+    return "ruleset-match:query";
+  }
+
+  function ruleSetMatchSubmitErrorKey(): string {
+    return "ruleset-match:submit";
   }
 
   function updateRuleDraft(ruleId: string, updater: (prev: RuleDraft) => RuleDraft) {
@@ -1569,7 +1613,7 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       const hasNameChange = base.name.trim() !== draft.name.trim();
       const hasEnabledChange = base.enabled !== draft.enabled;
       const draftPriority = rulePriorityMap.get(rule.id) ?? draft.priority;
-      const hasPriorityChange = base.priority !== draftPriority;
+      const hasPriorityChange = priorityDraggedRuleIds.has(rule.id) && base.priority !== draftPriority;
       if (
         !hasNameChange &&
         !hasEnabledChange &&
@@ -1594,7 +1638,7 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       });
     }
     return patches;
-  }, [baseRuleDrafts, pendingRuleDeletes, ruleDrafts, rulePriorityMap, rules]);
+  }, [baseRuleDrafts, pendingRuleDeletes, priorityDraggedRuleIds, ruleDrafts, rulePriorityMap, rules]);
 
   const changedRuleCount = useMemo(() => {
     let diff = 0;
@@ -1603,11 +1647,12 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       const base = baseRuleDrafts[rule.id];
       const draft = ruleDrafts[rule.id];
       if (!base || !draft) continue;
-      const draftPriority = rulePriorityMap.get(rule.id) ?? draft.priority;
+      const currentPriority = rulePriorityMap.get(rule.id) ?? draft.priority;
+      const draftPriority = priorityDraggedRuleIds.has(rule.id) ? currentPriority : base.priority;
       diff += countRuleDraftChanges(base, draft, draftPriority);
     }
     return diff;
-  }, [baseRuleDrafts, pendingRuleDeletes, ruleDrafts, rulePriorityMap, rules]);
+  }, [baseRuleDrafts, pendingRuleDeletes, priorityDraggedRuleIds, ruleDrafts, rulePriorityMap, rules]);
 
   const nodeRenameChanges = useMemo(() => {
     const changes: Array<{ id: string; name: string }> = [];
@@ -1631,7 +1676,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       changes.push({
         id: item.id,
         name: draft.name,
-        enabled: draft.enabled,
         format: draft.format,
         url: draft.url,
         outbound: toRuleSetOutboundValue(draft.outbound),
@@ -1657,14 +1701,16 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
   const nodesChangeCount = pendingNodeCreates.length + nodeRenameChanges.length + pendingNodeDeletes.size;
   const ruleSetsChangeCount = pendingRuleSetCreates.length + ruleSetUpdateCount + pendingRuleSetDeletes.size;
   const totalChanges = rulesChangeCount + nodesChangeCount + ruleSetsChangeCount;
+  const pendingRuleDeleteIds = useMemo(() => Array.from(pendingRuleDeletes), [pendingRuleDeletes]);
   const workspaceSummary = useMemo<RulesWorkspaceSummary>(
     () => ({
       totalChanges,
       rulesChangeCount,
       nodesChangeCount,
       ruleSetsChangeCount,
+      pendingRuleDeleteIds,
     }),
-    [nodesChangeCount, ruleSetsChangeCount, rulesChangeCount, totalChanges],
+    [nodesChangeCount, pendingRuleDeleteIds, ruleSetsChangeCount, rulesChangeCount, totalChanges],
   );
 
   useEffect(() => {
@@ -1807,7 +1853,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
     const ruleSetCreates: RuleSetCreateRequest[] = pendingRuleSetCreates.map((draft) => ({
       id: draft.id,
       name: draft.name,
-      enabled: draft.enabled,
       format: draft.format,
       url: draft.url,
       outbound: toRuleSetOutboundValue(draft.outbound),
@@ -1877,7 +1922,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       url: "",
       outbound: "direct",
       updateInterval: "1d",
-      enabled: true,
     });
 
     clearError();
@@ -2125,7 +2169,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
         url,
         outbound: normalizeOutboundTarget(ruleSetCreateDraft.outbound),
         updateInterval: ruleSetCreateDraft.updateInterval.trim() || "1d",
-        enabled: ruleSetCreateDraft.enabled,
       },
     ]);
 
@@ -2137,7 +2180,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       url: "",
       outbound: "direct",
       updateInterval: "1d",
-      enabled: true,
     });
     setShowRuleSetCreateForm(false);
     setExpandedRuleSetId("");
@@ -2219,7 +2261,6 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
       url: "",
       outbound: "direct",
       updateInterval: "1d",
-      enabled: true,
     });
   }
 
@@ -2254,6 +2295,58 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
     }
     setShowRuleSetCreateForm(true);
     clearError();
+  }
+
+  function resetRuleSetMatchComposer() {
+    ruleSetMatchRequestRef.current += 1;
+    setShowRuleSetMatchForm(false);
+    setRuleSetMatchQuery("");
+    setRuleSetMatchBusy(false);
+    setRuleSetMatchedIds(null);
+    clearError(ruleSetMatchQueryErrorKey());
+    clearError(ruleSetMatchSubmitErrorKey());
+  }
+
+  function toggleRuleSetMatchComposer() {
+    if (showRuleSetMatchForm || ruleSetMatchedIds) {
+      resetRuleSetMatchComposer();
+      return;
+    }
+    setShowRuleSetMatchForm(true);
+    clearError(ruleSetMatchQueryErrorKey());
+    clearError(ruleSetMatchSubmitErrorKey());
+  }
+
+  async function applyRuleSetMatch() {
+    const query = ruleSetMatchQuery.trim();
+    if (!query) {
+      reportError("Введите домен или ссылку.", ruleSetMatchQueryErrorKey());
+      return;
+    }
+
+    clearError(ruleSetMatchQueryErrorKey());
+    clearError(ruleSetMatchSubmitErrorKey());
+    const requestId = ruleSetMatchRequestRef.current + 1;
+    ruleSetMatchRequestRef.current = requestId;
+    setRuleSetMatchBusy(true);
+    try {
+      const matchedIds = await onMatchRuleSets(query);
+      if (ruleSetMatchRequestRef.current !== requestId) {
+        return;
+      }
+      setRuleSetMatchedIds(new Set(matchedIds));
+      setShowRuleSetMatchForm(true);
+    } catch (error) {
+      if (ruleSetMatchRequestRef.current !== requestId) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Не удалось выполнить Match.";
+      reportError(message, ruleSetMatchSubmitErrorKey());
+    } finally {
+      if (ruleSetMatchRequestRef.current === requestId) {
+        setRuleSetMatchBusy(false);
+      }
+    }
   }
 
   return (
@@ -3483,25 +3576,49 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
           <>
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Rule Set</h3>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-8 px-2"
-                onClick={(event) => {
-                  event.currentTarget.blur();
-                  toggleRuleSetCreateComposer();
-                }}
-              >
-                {showRuleSetCreateForm ? (
-                  <>
-                    <X size={13} className="mr-1" /> Отменить
-                  </>
-                ) : (
-                  <>
-                    <Plus size={13} className="mr-1" /> Добавить rule set
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                {hasAnyRuleSetCards || showRuleSetMatchForm || ruleSetMatchedIds ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={(event) => {
+                      event.currentTarget.blur();
+                      toggleRuleSetMatchComposer();
+                    }}
+                    data-testid="ruleset-match-toggle"
+                  >
+                    {showRuleSetMatchForm || ruleSetMatchedIds ? (
+                      <>
+                        <X size={13} className="mr-1" /> Отмена
+                      </>
+                    ) : (
+                      <>
+                        <Search size={13} className="mr-1" /> Match
+                      </>
+                    )}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-8 px-2"
+                  onClick={(event) => {
+                    event.currentTarget.blur();
+                    toggleRuleSetCreateComposer();
+                  }}
+                >
+                  {showRuleSetCreateForm ? (
+                    <>
+                      <X size={13} className="mr-1" /> Отменить
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={13} className="mr-1" /> Добавить rule set
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
 
             {showRuleSetCreateForm ? (
@@ -3556,29 +3673,17 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <select
-                      value={ruleSetCreateDraft.outbound}
-                      onChange={(event) => setRuleSetCreateDraft((prev) => ({ ...prev, outbound: event.target.value }))}
-                      className={SELECT_CLASS}
-                    >
-                      {outboundOptions.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
-
-                    <label className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 text-xs text-zinc-300">
-                      <input
-                        type="checkbox"
-                        checked={ruleSetCreateDraft.enabled}
-                        onChange={(event) => setRuleSetCreateDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
-                        className="h-3.5 w-3.5 accent-blue-500"
-                      />
-                      Enabled
-                    </label>
-                  </div>
+                  <select
+                    value={ruleSetCreateDraft.outbound}
+                    onChange={(event) => setRuleSetCreateDraft((prev) => ({ ...prev, outbound: event.target.value }))}
+                    className={`${SELECT_CLASS} w-full`}
+                  >
+                    {outboundOptions.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
 
                   <div className="pt-1">
                     <Button size="sm" className="h-9 w-full justify-center" onClick={addRuleSetCreateDraft}>
@@ -3589,33 +3694,64 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
               </div>
             ) : null}
 
-            {pendingRuleSetCreates.map((draft) => {
+            {showRuleSetMatchForm || ruleSetMatchedIds ? (
+              <div
+                className="rounded-xl border border-zinc-700/80 bg-gradient-to-b from-zinc-900 to-zinc-900/70 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                data-testid="ruleset-match-composer"
+              >
+                <div className="space-y-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Поиск домена в списках</div>
+                  <div className="flex items-start gap-2">
+                    <input
+                      value={ruleSetMatchQuery}
+                      onChange={(event) => {
+                        setRuleSetMatchQuery(event.target.value);
+                        clearError(ruleSetMatchQueryErrorKey());
+                        clearError(ruleSetMatchSubmitErrorKey());
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void applyRuleSetMatch();
+                        }
+                      }}
+                      placeholder="Домен или URL"
+                      className={INPUT_CLASS}
+                      disabled={ruleSetMatchBusy}
+                      data-testid="ruleset-match-input"
+                    />
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() => {
+                        void applyRuleSetMatch();
+                      }}
+                      disabled={ruleSetMatchBusy}
+                      data-testid="ruleset-match-submit"
+                      title={ruleSetMatchBusy ? "Поиск..." : "Выполнить поиск"}
+                    >
+                      <ArrowRight size={15} />
+                    </Button>
+                  </div>
+                  {readFieldError(ruleSetMatchQueryErrorKey()) ? (
+                    <p className={INLINE_ERROR_CLASS}>{readFieldError(ruleSetMatchQueryErrorKey())}</p>
+                  ) : null}
+                  {readFieldError(ruleSetMatchSubmitErrorKey()) ? (
+                    <p className={INLINE_ERROR_CLASS}>{readFieldError(ruleSetMatchSubmitErrorKey())}</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {filteredPendingRuleSetCreates.map((draft) => {
               const expanded = expandedRuleSetId === `new:${draft.tempId}`;
               const nameError = readFieldError(ruleSetNameErrorKey(`new:${draft.tempId}`));
               const urlError = readFieldError(ruleSetUrlErrorKey(`new:${draft.tempId}`));
 
               return (
                 <div key={draft.tempId} className="overflow-hidden rounded-xl border border-blue-500/40 bg-zinc-900">
-                  <div className="flex h-[37px] items-center gap-2 pl-2 pr-3">
-                    <label
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                      onClick={(event) => event.stopPropagation()}
-                      title={draft.enabled ? "Отключить Rule Set" : "Включить Rule Set"}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={draft.enabled}
-                        onChange={(event) => {
-                          const next = event.target.checked;
-                          setPendingRuleSetCreates((prev) =>
-                            prev.map((item) => (item.tempId === draft.tempId ? { ...item, enabled: next } : item)),
-                          );
-                          clearError();
-                        }}
-                        className="h-3.5 w-3.5 accent-blue-500"
-                      />
-                    </label>
-
+                  <div className="flex h-[37px] items-center gap-2 px-3">
                     <button
                       className="min-w-0 flex-1 text-left"
                       onClick={() => {
@@ -3734,7 +3870,7 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
               );
             })}
 
-            {visibleRuleSets.map((item) => {
+            {filteredVisibleRuleSets.map((item) => {
               const draft = ruleSetDrafts[item.id] ?? createRuleSetDraft(item);
               const base = baseRuleSetDrafts[item.id] ?? createRuleSetDraft(item);
               const diffCount = countRuleSetDraftChanges(base, draft);
@@ -3754,31 +3890,7 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
                         : "border-zinc-800 bg-zinc-900"
                   }`}
                 >
-                  <div className="flex h-[37px] items-center gap-2 pl-2 pr-3">
-                    <label
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                      onClick={(event) => event.stopPropagation()}
-                      title={draft.enabled ? "Отключить Rule Set" : "Включить Rule Set"}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={draft.enabled}
-                        onChange={(event) => {
-                          const next = event.target.checked;
-                          setRuleSetDrafts((prev) => ({
-                            ...prev,
-                            [item.id]: {
-                              ...draft,
-                              enabled: next,
-                            },
-                          }));
-                          clearError();
-                        }}
-                        className="h-3.5 w-3.5 accent-blue-500"
-                        disabled={markedDelete}
-                      />
-                    </label>
-
+                  <div className="flex h-[37px] items-center gap-2 px-3">
                     <button
                       className="min-w-0 flex-1 text-left"
                       onClick={() => {
@@ -3924,9 +4036,9 @@ export const RulesTab = forwardRef<RulesWorkspaceController, Props>(function Rul
               );
             })}
 
-            {!visibleRuleSets.length && !pendingRuleSetCreates.length ? (
+            {!filteredVisibleRuleSets.length && !filteredPendingRuleSetCreates.length ? (
               <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-3 text-xs text-zinc-500">
-                Rule Set пока отсутствуют.
+                {ruleSetMatchedIds ? "Совпадений в Rule Set не найдено." : "Rule Set пока отсутствуют."}
               </div>
             ) : null}
           </>

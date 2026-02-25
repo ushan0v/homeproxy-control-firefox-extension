@@ -148,13 +148,11 @@ test("playwright harness: auth, dashboard flow and sniffer flow", async ({ page,
 
   await page.getByTestId("nav-sniffer").click();
   await expect(page.getByText("media.youtube.com")).toBeVisible();
-  await expect(page.getByTestId("sniffer-error-toggle-media-youtube-com")).toHaveCount(0);
+  await expect(page.getByTestId("sniffer-error-indicator-media-youtube-com")).toHaveCount(0);
 
-  const cdnErrorToggle = page.getByTestId("sniffer-error-toggle-cdn-youtube-com");
-  await expect(cdnErrorToggle).toBeVisible();
-  await cdnErrorToggle.click();
-  await expect(page.getByTestId("sniffer-error-panel-cdn-youtube-com")).toContainText("NS_ERROR_OFFLINE");
-  await cdnErrorToggle.click();
+  const cdnErrorIndicator = page.getByTestId("sniffer-error-indicator-cdn-youtube-com");
+  await expect(cdnErrorIndicator).toBeVisible();
+  await cdnErrorIndicator.click();
   await expect(page.getByTestId("sniffer-error-panel-cdn-youtube-com")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Добавить правило" }).first().click();

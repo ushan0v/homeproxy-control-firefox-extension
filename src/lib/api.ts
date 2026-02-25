@@ -3,6 +3,7 @@ import type {
   DevicesListResponse,
   HomeproxyServiceActionResponse,
   HomeproxyServiceStatusResponse,
+  MatchResponse,
   NodeCreateRequest,
   NodeCreateResponse,
   NodeDeleteRequest,
@@ -321,6 +322,13 @@ export class HomeProxyApi {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(request),
+    });
+  }
+
+  async matchRuleSets(query: string): Promise<MatchResponse> {
+    return this.request<MatchResponse>(`/match?q=${encodeURIComponent(query)}`, {
+      method: "GET",
+      headers: this.headers(false),
     });
   }
 

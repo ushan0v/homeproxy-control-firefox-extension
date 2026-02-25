@@ -195,6 +195,23 @@ export interface CheckResponse {
   results: CheckResult[];
 }
 
+export interface MatchRuleSetItem {
+  tag: string;
+  shortTag: string;
+  url?: string;
+}
+
+export interface MatchResponse {
+  dbPath: string;
+  dbModTime: string;
+  loadedAt: string;
+  configPath: string;
+  configModTime: string;
+  input: string;
+  inputType: string;
+  matches: MatchRuleSetItem[];
+}
+
 export interface SnifferItem {
   id: string;
   tabId: number;
