@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowRight, Globe, Plus, Search } from "lucide-react";
+import { AlertCircle, ArrowRight, Globe, List, Plus, Search } from "lucide-react";
 import type { CheckResult } from "../../types/homeproxy";
-import { routeClassLabel, routeClassToBadgeColor } from "../../lib/rule-utils";
+import { routeClassLabel, routeClassToBadgeColor, type RuleDomainMatchHint } from "../../lib/rule-utils";
 import { normalizeDomain } from "../../lib/domain";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 
+interface DashboardRuleMatch {
+  id: string;
+  name: string;
+  hints: RuleDomainMatchHint[];
+  isActive: boolean;
+}
+
 interface Props {
   currentDomain: string;
   currentCheck: CheckResult | null;
+  currentRuleMatches: DashboardRuleMatch[];
   loadingCurrentSite: boolean;
   quickMode: boolean;
   onOpenQuick: (domain: string) => void;
@@ -18,6 +26,7 @@ interface Props {
 export function DashboardTab({
   currentDomain,
   currentCheck,
+  currentRuleMatches,
   loadingCurrentSite,
   quickMode,
   onOpenQuick,
@@ -26,10 +35,12 @@ export function DashboardTab({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!quickMode) {
+    if (quickMode) return;
+    const timer = window.setTimeout(() => {
       setInputValue("");
       setError("");
-    }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [quickMode]);
 
   const statusLabel = useMemo(() => {
@@ -44,6 +55,7 @@ export function DashboardTab({
   }, [currentCheck, currentDomain]);
 
   const statusColor = loadingCurrentSite ? "zinc" : routeClassToBadgeColor(currentCheck?.class ?? "unknown");
+
   function openPickerFromInput() {
     const normalized = normalizeDomain(inputValue);
     if (!normalized) {
@@ -94,9 +106,54 @@ export function DashboardTab({
         </div>
 
         {currentDomain ? (
-          <Button variant="secondary" size="sm" className="w-full gap-2 border-zinc-700 text-zinc-200" onClick={openPickerFromCurrentSite}>
-            <Plus size={14} /> Добавить правило
-          </Button>
+          <>
+            <Button variant="secondary" size="sm" className="w-full gap-2 border-zinc-700 text-zinc-200" onClick={openPickerFromCurrentSite}>
+              <Plus size={14} /> Добавить правило
+            </Button>
+            {currentRuleMatches.length ? (
+              <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Совпадение</p>
+                <div className="mt-1 max-h-40 space-y-1.5 overflow-y-auto pr-0.5 no-scrollbar">
+                  {currentRuleMatches.map((match) => {
+                    const visibleHints = match.hints.slice(0, 2);
+                    const hiddenHints = Math.max(0, match.hints.length - visibleHints.length);
+                    return (
+                      <div
+                        key={match.id}
+                        className={`rounded-md border px-2 py-1.5 ${
+                          match.isActive ? "border-blue-500/35 bg-blue-500/5" : "border-zinc-800 bg-zinc-900/70"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <List size={11} className={match.isActive ? "text-blue-400" : "text-zinc-500"} />
+                          <p className="min-w-0 flex-1 truncate text-[11px] font-semibold leading-tight text-zinc-100" title={match.name}>
+                            {match.name || "Без названия"}
+                          </p>
+                          {match.isActive ? (
+                            <Badge color="blue" className="shrink-0 px-1.5 py-0 text-[9px]">
+                              Текущее
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <div className="mt-1 space-y-0.5">
+                          {visibleHints.map((hint) => (
+                            <p
+                              key={`${match.id}:${hint.key}:${hint.value}`}
+                              className="truncate text-[10px] leading-tight text-zinc-300"
+                              title={`${hint.label}: ${hint.value}`}
+                            >
+                              <span className="text-zinc-500">{hint.label}:</span> {hint.value}
+                            </p>
+                          ))}
+                          {hiddenHints ? <p className="text-[10px] leading-tight text-zinc-500">+{hiddenHints} ещё</p> : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </>
         ) : null}
       </div>
 

@@ -233,6 +233,7 @@ export interface SnifferDomainItem {
   method: string;
   type: string;
   status: SnifferPrimaryStatus;
+  hasRuleMatch: boolean;
   outbound?: string;
   statusCode: number;
   durationMs: number;

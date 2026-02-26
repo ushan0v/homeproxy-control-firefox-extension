@@ -24,7 +24,7 @@ import { SettingsTab } from "./components/tabs/SettingsTab";
 import { SnifferTab } from "./components/tabs/SnifferTab";
 import { Button } from "./components/ui/Button";
 import { ApiError, HomeProxyApi } from "./lib/api";
-import { extractDomainFromUrl } from "./lib/domain";
+import { extractDomainFromUrl, getRootDomain } from "./lib/domain";
 import {
   buildSnifferDomainItems,
   clearSnifferTab,
@@ -32,14 +32,19 @@ import {
   fetchActiveSnifferData,
 } from "./lib/sniffer";
 import {
-  type DomainScope,
+  collectRuleDomainMatchHints,
+  detectRuleMatchKeyFromExpr,
+  filterHintsByMatchKey,
+  findRuleByCheckResult,
   routeClassLabel,
+  type DomainScope,
 } from "./lib/rule-utils";
 import { clearSettings, loadQuickActions, loadSettings, saveQuickActions, saveSettings } from "./lib/storage";
 import { ensureOriginPermission, hasExtensionRuntime, runtimeSendMessage, tabsQueryActive } from "./lib/webext";
 import type {
   CheckResult,
   DeviceLeaseView,
+  MatchRuleSetItem,
   QuickActionConfig,
   RoutingNodeView,
   RoutingRuleView,
@@ -77,6 +82,67 @@ interface ServiceToggleResponseEnvelope {
   ok: boolean;
   task?: ServiceToggleTask | null;
   error?: string;
+}
+
+interface ResolvedRuleSetMatches {
+  ids: string[];
+  keys: string[];
+}
+
+interface QuickRuleSetMatchesByScope {
+  full: string[];
+  root: string[];
+}
+
+function shortRuleSetTag(rawTag: string): string {
+  const tag = String(rawTag || "").trim();
+  if (tag.startsWith("cfg-") && tag.endsWith("-rule") && tag.length > 9) {
+    return tag.slice(4, -5);
+  }
+  return "";
+}
+
+function resolveRuleSetMatches(matches: MatchRuleSetItem[], ruleSets: RuleSetListItem[]): ResolvedRuleSetMatches {
+  const aliasToRuleSet = new Map<string, RuleSetListItem>();
+
+  for (const item of ruleSets) {
+    const id = item.id.trim();
+    const tag = item.tag.trim();
+    const short = shortRuleSetTag(tag);
+    if (id) aliasToRuleSet.set(id, item);
+    if (tag) aliasToRuleSet.set(tag, item);
+    if (short) aliasToRuleSet.set(short, item);
+  }
+
+  const ids = new Set<string>();
+  const keys = new Set<string>();
+
+  for (const match of matches) {
+    const candidates = [match.tag, match.shortTag]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    for (const candidate of candidates) {
+      const resolved = aliasToRuleSet.get(candidate);
+      if (resolved) {
+        const id = resolved.id.trim();
+        const tag = resolved.tag.trim();
+        if (id) {
+          ids.add(id);
+          keys.add(id);
+        }
+        if (tag) {
+          keys.add(tag);
+        }
+        continue;
+      }
+      keys.add(candidate);
+    }
+  }
+
+  return {
+    ids: [...ids],
+    keys: [...keys],
+  };
 }
 
 function humanizeApiError(error: unknown): string {
@@ -120,6 +186,7 @@ export default function App() {
 
   const [currentDomain, setCurrentDomain] = useState("");
   const [currentCheck, setCurrentCheck] = useState<CheckResult | null>(null);
+  const [currentMatchedRuleSetKeys, setCurrentMatchedRuleSetKeys] = useState<string[]>([]);
   const [loadingCurrentSite, setLoadingCurrentSite] = useState(false);
 
   const [snifferTabId, setSnifferTabId] = useState<number | null>(null);
@@ -129,6 +196,10 @@ export default function App() {
   const [workspaceSummary, setWorkspaceSummary] = useState<RulesWorkspaceSummary>(EMPTY_WORKSPACE_SUMMARY);
   const [toolbarError, setToolbarError] = useState("");
   const [quickFlow, setQuickFlow] = useState<{ domain: string; testIdPrefix: string } | null>(null);
+  const [quickMatchedRuleSetKeysByScope, setQuickMatchedRuleSetKeysByScope] = useState<QuickRuleSetMatchesByScope>({
+    full: [],
+    root: [],
+  });
   const [frameHeight, setFrameHeight] = useState<number | null>(null);
   const [contentExceedsMaxHeight, setContentExceedsMaxHeight] = useState(false);
 
@@ -140,6 +211,8 @@ export default function App() {
   const navRef = useRef<HTMLElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const rulesTabRef = useRef<RulesWorkspaceController | null>(null);
+  const ruleSetsRef = useRef<RuleSetListItem[]>([]);
+  const quickScrollDomainRef = useRef("");
 
   const api = useMemo(() => (settings ? new HomeProxyApi(settings) : null), [settings]);
 
@@ -189,6 +262,27 @@ export default function App() {
     }
     return checks;
   }, []);
+  const fetchRuleSetMatches = useCallback(
+    async (client: HomeProxyApi, query: string): Promise<ResolvedRuleSetMatches> => {
+      const normalized = query.trim();
+      if (!normalized) {
+        return {
+          ids: [],
+          keys: [],
+        };
+      }
+      try {
+        const response = await client.matchRuleSets(normalized);
+        return resolveRuleSetMatches(response.matches ?? [], ruleSetsRef.current);
+      } catch {
+        return {
+          ids: [],
+          keys: [],
+        };
+      }
+    },
+    [],
+  );
 
   const resolvedQuickActions = useMemo<ResolvedQuickAction[]>(() => {
     const pendingDeleted = new Set(workspaceSummary.pendingRuleDeleteIds);
@@ -201,9 +295,26 @@ export default function App() {
       })
       .filter((value): value is ResolvedQuickAction => Boolean(value));
   }, [quickActions, rules, workspaceSummary.pendingRuleDeleteIds]);
+  const quickDomain = quickFlow?.domain || "";
+  const quickRootDomain = quickDomain ? getRootDomain(quickDomain) : "";
+  const quickRuleSetFullKeySet = useMemo(
+    () => new Set(quickMatchedRuleSetKeysByScope.full),
+    [quickMatchedRuleSetKeysByScope.full],
+  );
+  const quickRuleSetRootKeySet = useMemo(
+    () => new Set(quickMatchedRuleSetKeysByScope.root),
+    [quickMatchedRuleSetKeysByScope.root],
+  );
   const quickRuleOptions = useMemo(
     () =>
-      resolvedQuickActions.map(({ rule }) => {
+      [...resolvedQuickActions]
+        .sort((left, right) => {
+          if (left.rule.priority !== right.rule.priority) {
+            return left.rule.priority - right.rule.priority;
+          }
+          return left.rule.name.localeCompare(right.rule.name);
+        })
+        .map(({ rule }) => {
         const outboundClass: "direct" | "block" | "proxy" | "unknown" =
           rule.outbound.class === "direct" || rule.outbound.class === "block" || rule.outbound.class === "proxy"
             ? (rule.outbound.class as "direct" | "block" | "proxy")
@@ -216,10 +327,89 @@ export default function App() {
           label: rule.name,
           outboundClass,
           outboundLabel: outboundClass === "proxy" ? `Proxy: ${outboundTarget || "не выбран"}` : routeClassLabel(outboundClass),
+          matchHintsByScope: {
+            full: quickDomain ? collectRuleDomainMatchHints(rule, quickDomain, quickRuleSetFullKeySet) : [],
+            root: quickRootDomain ? collectRuleDomainMatchHints(rule, quickRootDomain, quickRuleSetRootKeySet) : [],
+          },
         };
-      }),
-    [resolvedQuickActions],
+        }),
+    [quickDomain, quickRootDomain, quickRuleSetFullKeySet, quickRuleSetRootKeySet, resolvedQuickActions],
   );
+  const currentRuleSetKeySet = useMemo(() => new Set(currentMatchedRuleSetKeys), [currentMatchedRuleSetKeys]);
+  const currentRuleMatches = useMemo(() => {
+    if (!currentDomain) {
+      return [];
+    }
+
+    const preferredKey = detectRuleMatchKeyFromExpr(currentCheck?.ruleExpr);
+    const matches = rules
+      .filter((rule) => rule.enabled)
+      .map((rule) => ({
+        rule,
+        hints: collectRuleDomainMatchHints(rule, currentDomain, currentRuleSetKeySet),
+      }))
+      .filter((entry) => entry.hints.length > 0);
+
+    if (!matches.length) {
+      return [];
+    }
+
+    let activeRuleId = "";
+
+    if (currentCheck?.matched) {
+      const routeRule = findRuleByCheckResult(currentCheck, rules);
+      if (routeRule) {
+        const routeMatch = matches.find((entry) => entry.rule.id === routeRule.id);
+        if (routeMatch) {
+          activeRuleId = routeMatch.rule.id;
+        }
+      }
+
+      const normalizedRuleName = currentCheck.ruleName?.trim().toLowerCase() || "";
+      if (!activeRuleId && normalizedRuleName) {
+        const byName = matches.find((entry) => {
+          const rule = entry.rule;
+          return (
+            rule.name.trim().toLowerCase() === normalizedRuleName ||
+            rule.id.trim().toLowerCase() === normalizedRuleName ||
+            rule.tag.trim().toLowerCase() === normalizedRuleName
+          );
+        });
+        if (byName) {
+          activeRuleId = byName.rule.id;
+        }
+      }
+
+      if (!activeRuleId && preferredKey) {
+        const byHintKey = matches.find((entry) => entry.hints.some((hint) => hint.key === preferredKey));
+        if (byHintKey) {
+          activeRuleId = byHintKey.rule.id;
+        }
+      }
+
+      if (!activeRuleId) {
+        const byClass = matches.find((entry) => entry.rule.outbound.class === currentCheck.class);
+        if (byClass) {
+          activeRuleId = byClass.rule.id;
+        }
+      }
+
+      if (!activeRuleId) {
+        activeRuleId = matches[0]?.rule.id || "";
+      }
+    }
+
+    return matches.map((entry) => ({
+      id: entry.rule.id,
+      name: entry.rule.name || (entry.rule.id === activeRuleId ? currentCheck?.ruleName || entry.rule.id : entry.rule.id),
+      hints: entry.rule.id === activeRuleId ? filterHintsByMatchKey(entry.hints, preferredKey) : entry.hints,
+      isActive: entry.rule.id === activeRuleId,
+    }));
+  }, [currentCheck, currentDomain, currentRuleSetKeySet, rules]);
+
+  useEffect(() => {
+    ruleSetsRef.current = ruleSets;
+  }, [ruleSets]);
 
   const refreshRules = useCallback(
     async (client: HomeProxyApi) => {
@@ -289,16 +479,18 @@ export default function App() {
 
         if (!domain) {
           setCurrentCheck(null);
+          setCurrentMatchedRuleSetKeys([]);
           return;
         }
 
-        const check = await client.checkDomains([domain]);
+        const [check, ruleSetMatches] = await Promise.all([client.checkDomains([domain]), fetchRuleSetMatches(client, domain)]);
         setCurrentCheck(check.results[0] ?? null);
+        setCurrentMatchedRuleSetKeys(ruleSetMatches.keys);
       } finally {
         setLoadingCurrentSite(false);
       }
     },
-    [setCurrentCheck, setCurrentDomain],
+    [fetchRuleSetMatches, setCurrentCheck, setCurrentDomain],
   );
 
   const refreshSniffer = useCallback(
@@ -348,6 +540,11 @@ export default function App() {
     },
     [refreshCurrentSite, refreshDevices, refreshRulesWorkspace, refreshServiceStatus, refreshSniffer],
   );
+  const initializeWithSettingsRef = useRef(initializeWithSettings);
+
+  useEffect(() => {
+    initializeWithSettingsRef.current = initializeWithSettings;
+  }, [initializeWithSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -369,7 +566,7 @@ export default function App() {
         setSettings(storedSettings);
 
         try {
-          await initializeWithSettings(storedSettings, false);
+          await initializeWithSettingsRef.current(storedSettings, false);
         } catch (error) {
           if (cancelled) return;
           setConnectionState("error");
@@ -387,7 +584,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [initializeWithSettings]);
+  }, []);
 
   useEffect(() => {
     if (!rules.length) return;
@@ -410,6 +607,35 @@ export default function App() {
     setHasSavedQuickActionsConfig(true);
     void saveQuickActions(defaults);
   }, [hasSavedQuickActionsConfig, rules]);
+
+  useEffect(() => {
+    if (connectionState !== "connected" || !api || !quickDomain) {
+      setQuickMatchedRuleSetKeysByScope({
+        full: [],
+        root: [],
+      });
+      return;
+    }
+
+    let disposed = false;
+
+    void Promise.all([
+      fetchRuleSetMatches(api, quickDomain),
+      quickRootDomain && quickRootDomain !== quickDomain
+        ? fetchRuleSetMatches(api, quickRootDomain)
+        : Promise.resolve<ResolvedRuleSetMatches>({ ids: [], keys: [] }),
+    ]).then(([fullMatches, rootMatches]) => {
+      if (disposed) return;
+      setQuickMatchedRuleSetKeysByScope({
+        full: fullMatches.keys,
+        root: quickRootDomain === quickDomain ? fullMatches.keys : rootMatches.keys,
+      });
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [api, connectionState, fetchRuleSetMatches, quickDomain, quickRootDomain]);
 
   useEffect(() => {
     if (connectionState !== "connected" || !api) return;
@@ -532,17 +758,23 @@ export default function App() {
 
   useLayoutEffect(() => {
     if (connectionState !== "connected") return;
-    if (quickFlow?.domain) {
+    const nextQuickDomain = quickFlow?.domain || "";
+    if (nextQuickDomain && quickScrollDomainRef.current !== nextQuickDomain) {
       mainRef.current?.scrollTo({ top: 0, behavior: "auto" });
     }
+    quickScrollDomainRef.current = nextQuickDomain;
     recalculateFrameHeight();
   }, [
     activeTab,
     connectionState,
     currentCheck,
     currentDomain,
+    currentRuleMatches.length,
+    currentMatchedRuleSetKeys.length,
     loadingCurrentSite,
     quickFlow,
+    quickMatchedRuleSetKeysByScope.full.length,
+    quickMatchedRuleSetKeysByScope.root.length,
     quickActions.length,
     recalculateFrameHeight,
     routingNodes.length,
@@ -605,12 +837,17 @@ export default function App() {
     setRefreshing(false);
     setCurrentDomain("");
     setCurrentCheck(null);
+    setCurrentMatchedRuleSetKeys([]);
     setLoadingCurrentSite(false);
     setSnifferTabId(null);
     setSnifferItems([]);
     setRules([]);
     setRoutingNodes([]);
     setRuleSets([]);
+    setQuickMatchedRuleSetKeysByScope({
+      full: [],
+      root: [],
+    });
     setDevices([]);
     setWorkspaceSummary(EMPTY_WORKSPACE_SUMMARY);
   }
@@ -679,6 +916,10 @@ export default function App() {
 
   function handleOpenQuick(domain: string, testIdPrefix: string) {
     setQuickFlow({ domain, testIdPrefix });
+    setQuickMatchedRuleSetKeysByScope({
+      full: [],
+      root: [],
+    });
     setToolbarError("");
   }
 
@@ -700,37 +941,8 @@ export default function App() {
     }
 
     try {
-      const response = await api.matchRuleSets(query);
-      const tagToId = new Map<string, string>();
-      const knownIds = new Set<string>();
-
-      for (const item of ruleSets) {
-        const id = item.id.trim();
-        const tag = item.tag.trim();
-        if (!id) continue;
-        knownIds.add(id);
-        tagToId.set(id, id);
-        if (tag) {
-          tagToId.set(tag, id);
-        }
-      }
-
-      const matchedIds = new Set<string>();
-      for (const item of response.matches) {
-        const tag = item.tag?.trim() || "";
-        const shortTag = item.shortTag?.trim() || "";
-        if (tag && tagToId.has(tag)) {
-          matchedIds.add(tagToId.get(tag)!);
-        }
-        if (shortTag && tagToId.has(shortTag)) {
-          matchedIds.add(tagToId.get(shortTag)!);
-        }
-        if (shortTag && knownIds.has(shortTag)) {
-          matchedIds.add(shortTag);
-        }
-      }
-
-      return Array.from(matchedIds);
+      const resolved = await fetchRuleSetMatches(api, query);
+      return resolved.ids;
     } catch (error) {
       throw new Error(humanizeApiError(error));
     }
@@ -1052,6 +1264,7 @@ export default function App() {
           <DashboardTab
             currentDomain={currentDomain}
             currentCheck={currentCheck}
+            currentRuleMatches={currentRuleMatches}
             loadingCurrentSite={loadingCurrentSite}
             quickMode={quickMode}
             onOpenQuick={(domain) => handleOpenQuick(domain, "dashboard")}

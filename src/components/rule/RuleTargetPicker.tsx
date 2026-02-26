@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { CornerDownRight, Globe } from "lucide-react";
 import { getRootDomain, isSubdomain, normalizeDomain } from "../../lib/domain";
-import { routeClassLabel, routeClassToBadgeColor, type DomainScope } from "../../lib/rule-utils";
+import {
+  routeClassLabel,
+  routeClassToBadgeColor,
+  type DomainScope,
+  type RuleDomainMatchHint,
+} from "../../lib/rule-utils";
 import { Badge } from "../ui/Badge";
 
 export interface RuleTargetOption {
@@ -9,6 +14,10 @@ export interface RuleTargetOption {
   label: string;
   outboundClass?: "proxy" | "direct" | "block" | "unknown";
   outboundLabel?: string;
+  matchHintsByScope?: {
+    full: RuleDomainMatchHint[];
+    root: RuleDomainMatchHint[];
+  };
   testId?: string;
 }
 
@@ -57,7 +66,7 @@ export function RuleTargetPicker({
   emptyMessage = "Нет включенных правил в Quick Actions.",
   testIdPrefix = "rule-picker",
 }: Props) {
-  const [selectedScope, setSelectedScope] = useState<DomainScope>("root");
+  const [selectedScope, setSelectedScope] = useState<DomainScope>("full");
   const [busyRuleId, setBusyRuleId] = useState("");
   const [error, setError] = useState("");
   const domainState = useMemo(() => resolveProcessedDomain(domain), [domain]);
@@ -67,7 +76,7 @@ export function RuleTargetPicker({
 
   useEffect(() => {
     setBusyRuleId("");
-    setSelectedScope("root");
+    setSelectedScope("full");
     setError("");
   }, [processedDomain.full]);
 
@@ -134,26 +143,6 @@ export function RuleTargetPicker({
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Тип правила</p>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  data-testid={`${testIdPrefix}-scope-root`}
-                  onClick={() => selectScope("root")}
-                  className={`rounded-lg border px-2 py-2 text-left transition-colors ${
-                    selectedScope === "root"
-                      ? "border-amber-500/40 bg-amber-500/10"
-                      : "border-zinc-700 bg-zinc-800/70 hover:border-zinc-500"
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-400">
-                      <Globe size={14} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-[11px] font-semibold text-zinc-100">*.{processedDomain.root}</div>
-                      <div className="text-[10px] text-zinc-500">Домен и поддомены</div>
-                    </div>
-                  </div>
-                </button>
-
-                <button
                   data-testid={`${testIdPrefix}-scope-full`}
                   onClick={() => selectScope("full")}
                   className={`rounded-lg border px-2 py-2 text-left transition-colors ${
@@ -174,6 +163,26 @@ export function RuleTargetPicker({
                     </div>
                   </div>
                 </button>
+
+                <button
+                  data-testid={`${testIdPrefix}-scope-root`}
+                  onClick={() => selectScope("root")}
+                  className={`rounded-lg border px-2 py-2 text-left transition-colors ${
+                    selectedScope === "root"
+                      ? "border-amber-500/40 bg-amber-500/10"
+                      : "border-zinc-700 bg-zinc-800/70 hover:border-zinc-500"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-400">
+                      <Globe size={14} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-[11px] font-semibold text-zinc-100">*.{processedDomain.root}</div>
+                      <div className="text-[10px] text-zinc-500">Домен и поддомены</div>
+                    </div>
+                  </div>
+                </button>
               </div>
             </div>
 
@@ -182,26 +191,64 @@ export function RuleTargetPicker({
               {visibleOptions.map((option) => {
                 const outboundClass = option.outboundClass || "unknown";
                 const outboundLabel = option.outboundLabel || routeClassLabel(outboundClass);
+                const hintsByScope = option.matchHintsByScope ?? { full: [], root: [] };
+                const hints = selectedScope === "root" ? hintsByScope.root : hintsByScope.full;
+                const hasHints = hints.length > 0;
+                const visibleHints = hints.slice(0, 2);
+                const hiddenHints = Math.max(0, hints.length - visibleHints.length);
 
                 return (
-                  <button
+                  <div
                     key={option.id}
-                    onClick={() => {
-                      void handleSelectRule(option.id);
-                    }}
-                    data-testid={option.testId}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/70 px-3 py-2 text-left transition-colors hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={busyRuleId === option.id}
+                    className="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 hover:border-zinc-500"
                   >
-                    <div className="flex items-center gap-2">
-                      <div className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">
-                        {busyRuleId === option.id ? "Добавление..." : option.label}
+                    <button
+                      onClick={() => {
+                        void handleSelectRule(option.id);
+                      }}
+                      data-testid={option.testId}
+                      className={`w-full px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-60 ${
+                        hasHints ? "border-b border-zinc-700 bg-zinc-800" : "bg-zinc-800"
+                      }`}
+                      disabled={busyRuleId === option.id}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">
+                          {busyRuleId === option.id ? "Добавление..." : option.label}
+                        </div>
+                        <Badge color={routeClassToBadgeColor(outboundClass)} className="shrink-0 whitespace-nowrap">
+                          {outboundLabel}
+                        </Badge>
                       </div>
-                      <Badge color={routeClassToBadgeColor(outboundClass)} className="shrink-0 whitespace-nowrap">
-                        {outboundLabel}
-                      </Badge>
-                    </div>
-                  </button>
+                    </button>
+
+                    {hasHints ? (
+                      <div
+                        className="bg-zinc-900 px-2.5 py-1.5"
+                        data-testid={option.testId ? `${option.testId}-matches` : undefined}
+                      >
+                        <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-zinc-500">Совпадение</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {visibleHints.map((hint) => (
+                            <span
+                              key={`${option.id}:${hint.key}:${hint.value}`}
+                              className="inline-flex max-w-full items-center rounded-md border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[10px] leading-none text-zinc-300"
+                              title={`${hint.label}: ${hint.value}`}
+                            >
+                              <span className="truncate">
+                                <span className="text-zinc-500">{hint.label}:</span> {hint.value}
+                              </span>
+                            </span>
+                          ))}
+                          {hiddenHints ? (
+                            <span className="rounded-md border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[10px] leading-none text-zinc-500">
+                              +{hiddenHints}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
 

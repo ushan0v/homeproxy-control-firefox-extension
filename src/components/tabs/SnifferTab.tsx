@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CircleAlert, Trash2 } from "lucide-react";
+import { CircleAlert, Pencil, Plus, Trash2 } from "lucide-react";
 import type { SnifferDomainItem } from "../../types/homeproxy";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -80,6 +80,7 @@ export function SnifferTab({ items, tabId, onOpenQuick, onClearSniffer }: Props)
       <div className="space-y-1 p-2">
         {filtered.map((req) => {
           const hasError = Boolean(req.error.trim());
+          const actionTitle = req.hasRuleMatch ? "Изменить правило" : "Добавить правило";
           const testIdSuffix = toTestIdSuffix(req.id);
 
           return (
@@ -115,16 +116,18 @@ export function SnifferTab({ items, tabId, onOpenQuick, onClearSniffer }: Props)
                 <Button
                   variant="secondary"
                   size="sm"
-                  className="h-8 w-8 border-zinc-700 px-0 text-zinc-200 hover:text-zinc-100"
+                  className="h-9 w-9 border-zinc-700 px-0 text-zinc-300 hover:text-zinc-100 [&>svg]:h-5 [&>svg]:w-5"
                   onClick={() => {
                     onOpenQuick(req.domain || req.url);
                   }}
-                  aria-label="Добавить правило"
-                  title="Добавить правило"
+                  aria-label={actionTitle}
+                  title={actionTitle}
                 >
-                  <span aria-hidden="true" className="text-[21px] font-semibold leading-none">
-                    +
-                  </span>
+                  {req.hasRuleMatch ? (
+                    <Pencil strokeWidth={2.25} />
+                  ) : (
+                    <Plus strokeWidth={2.25} />
+                  )}
                 </Button>
               </div>
             </div>

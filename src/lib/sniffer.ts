@@ -91,6 +91,10 @@ export function buildSnifferDomainItems(items: SnifferItem[], checks: CheckResul
   for (const entry of byDomain.values()) {
     const check = checkMap.get(entry.domain);
     const status = check ? checkToSnifferStatus(check) : "Unknown";
+    const hasRuleMatch =
+      Boolean(check?.matched) ||
+      (typeof check?.ruleIndex === "number" && check.ruleIndex >= 0) ||
+      Boolean(check?.ruleName?.trim());
 
     resolved.push({
       id: entry.id,
@@ -99,6 +103,7 @@ export function buildSnifferDomainItems(items: SnifferItem[], checks: CheckResul
       method: entry.method,
       type: entry.type,
       status,
+      hasRuleMatch,
       outbound: check?.outbound,
       statusCode: entry.statusCode,
       durationMs: entry.durationMs,
